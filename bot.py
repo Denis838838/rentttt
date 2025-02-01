@@ -8,26 +8,21 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 
-# Получаем токен бота из переменных окружения
+# Получаем токен из переменной окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Инициализация бота
+# Инициализируем бота
 updater = Updater(token=BOT_TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
 # Команда /start
 def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Привет! Я бот для арендаторов. Используйте /help для списка команд.")
+    update.message.reply_text("Привет! Я бот.")
 
-# Обработчик неизвестных сообщений
-def unknown(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Извините, я не понимаю эту команду.")
-
-# Добавляем обработчики команд
+# Добавляем обработчик
 dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(Filters.command, unknown))
 
-# Запуск бота
+# Запускаем бота
 def main():
     updater.start_polling()
     updater.idle()
