@@ -1,56 +1,123 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 import os
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+import threading
+import logging
+from fastapi import FastAPI
+import uvicorn
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    MessageHandler,
+    Filters,
+    CallbackContext,
+    ConversationHandler
+)
 
-# Читаем URL базы данных из переменной окружения (Railway выдаст URL)
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")  # По умолчанию SQLite для локального теста
+# --------------------- Логирование и конфигурация Telegram-бота ---------------------
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Настройка базы данных через SQLAlchemy
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# Конфигурация бота
+BOT_TOKEN = "7738966029:AAGMjMt-gg3R37p7DX3PTAoDtwOhmCrx_uM"  # Твой токен
+ADMIN_CHAT_ID = 1013161349  # Твой chat_id (админ)
 
-# Создаём модель таблицы
-class Item(Base):
-    __tablename__ = "items"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
+# Прочие переменные и клавиатуры (код, который ты уже написал)
+tenant_buttons = [
+    ["История оплаты", "История встреч"],
+    ["История счётчиков", "Правила квартиры"]
+]
+tenant_markup = ReplyKeyboardMarkup(tenant_buttons, resize_keyboard=True, one_time_keyboard=False)
 
-# Создаём таблицы в БД
-Base.metadata.create_all(bind=engine)
+admin_buttons = [
+    ["Список жильцов", "История оплат (все)"],
+    ["Добавить жильца", "Удалить жильца"],
+    ["Обновить жильца", "Уведомить жильцов"],
+    ["Правила квартиры (ред.)"]
+]
+admin_markup = ReplyKeyboardMarkup(admin_buttons, resize_keyboard=True, one_time_keyboard=False)
 
-# Создаём FastAPI-приложение
+RULES = (
+    "1. Соблюдать тишину после 22:00.\n"
+    "2. Не забывать вовремя оплачивать счета.\n"
+    "3. Содержать квартиру в чистоте.\n"
+    "4. При возникновении проблем — сообщите хозяину.\n"
+)
+
+TENANTS = {}  # Зарегистрированные жильцы
+
+def get_user_role(user_id: int) -> str:
+    if user_id == ADMIN_CHAT_ID:
+        return "admin"
+    elif user_id in TENANTS:
+        return "tenant"
+    else:
+        return "none"
+
+def start_command(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    role = get_user_role(user_id)
+    first_name = update.effective_user.first_name or "Гость"
+
+    if role == "admin":
+        text = f"Здравствуйте, {first_name} (админ)!\nВыберите действие:"
+        update.message.reply_text(text, reply_markup=admin_markup)
+    elif role == "tenant":
+        text = f"Привет, {first_name}!\nЯ бот для арендаторов.\nВот ваше меню:"
+        update.message.reply_text(text, reply_markup=tenant_markup)
+    else:
+        update.message.reply_text("У вас нет доступа к этому боту. Обратитесь к администратору.")
+
+# Здесь располагается остальной код для обработки сообщений и ConversationHandler  
+# (то, что ты уже реализовал: handle_tenant_text, handle_admin_text, функции для управления жильцами и т.д.)
+# Например, добавим простой MessageHandler, как в твоем коде:
+def default_message_handler(update: Update, context: CallbackContext) -> None:
+    if get_user_role(update.effective_user.id) == "admin":
+        handle_admin_text(update, context)
+    else:
+        handle_tenant_text(update, context)
+
+# Здесь должен быть код ConversationHandler (tenant_management_conv) и его состояния, как в твоем примере.
+# Для краткости он опущен, но его нужно оставить без изменений.
+
+# --------------------- Функция запуска Telegram-бота ---------------------
+def run_telegram_bot():
+    updater = Updater(token=BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start_command))
+    # Добавляем обработчик для управления жильцами (ConversationHandler)
+    dp.add_handler(tenant_management_conv)
+    # Обработчик для текстовых сообщений
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, default_message_handler))
+
+    updater.start_polling()
+    logger.info("Бот запущен. Ожидание обновлений...")
+    updater.idle()
+
+# --------------------- Функция запуска веб-сервера для Railway ---------------------
 app = FastAPI()
 
-# Функция для получения сессии БД
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+@app.get("/")
+def read_root():
+    return {"message": "Приложение работает (бот запущен)"}
 
-# Эндпоинт для добавления элемента
-@app.post("/items/")
-def create_item(name: str, db: Session = Depends(get_db)):
-    db_item = Item(name=name)
-    db.add(db_item)
-    db.commit()
-    db.refresh(db_item)
-    return {"id": db_item.id, "name": db_item.name}
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
-# Эндпоинт для получения всех элементов
-@app.get("/items/")
-def read_items(db: Session = Depends(get_db)):
-    items = db.query(Item).all()
-    return items
+# --------------------- Главная функция ---------------------
+def main():
+    # Запускаем веб-сервер в отдельном потоке, чтобы Railway считал контейнер активным
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
 
-# Эндпоинт для получения элемента по ID
-@app.get("/items/{item_id}")
-def read_item(item_id: int, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return item
+    # Запускаем Telegram-бота (long polling)
+    run_telegram_bot()
+
+if __name__ == "__main__":
+    main()
